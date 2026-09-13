@@ -63,11 +63,14 @@ clone:
 
 patch: $(BUILD_DIR)/excalidraw-storage-backend/.patched $(BUILD_DIR)/excalidraw-frontend/.patched
 
-$(BUILD_DIR)/excalidraw-storage-backend/.patched:
+$(BUILD_DIR)/excalidraw-storage-backend/.patched: Makefile
 	sed -i 's/npm install -g @nestjs\/cli$$/npm install -g @nestjs\/cli@8/' $(BUILD_DIR)/excalidraw-storage-backend/Dockerfile
+	grep -q 'mkdir -p /app/data' $(BUILD_DIR)/excalidraw-storage-backend/Dockerfile || \
+		sed -i '/^USER node$$/i RUN mkdir -p /app/data \&\& chown node:node /app/data\n' \
+		$(BUILD_DIR)/excalidraw-storage-backend/Dockerfile
 	touch $@
 
-$(BUILD_DIR)/excalidraw-frontend/.patched:
+$(BUILD_DIR)/excalidraw-frontend/.patched: Makefile
 	sed -i 's/^FROM node:18 AS build$$/FROM node:22 AS build/' $(BUILD_DIR)/excalidraw-frontend/Dockerfile
 	grep -q VITE_APP_WS_SERVER_URL $(BUILD_DIR)/excalidraw-frontend/Dockerfile || \
 		sed -i '/^RUN yarn build:app:docker$$/i \
