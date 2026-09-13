@@ -1,0 +1,45 @@
+# arm64 variant of basic/docker-compose.yaml (any arm64 device), fronted by a
+# TLS-terminating nginx proxy on 443. HTTPS is required (not optional) for
+# the Live Collaboration feature: it uses window.crypto.subtle, which
+# browsers only expose in a secure context (https, or http://localhost).
+# A LAN IP served over plain http fails that check silently.
+#
+# The frontend's VITE_APP_* values are baked into its static JS bundle at
+# BUILD time (see ../build/excalidraw-frontend/Dockerfile build-args) --
+# there is intentionally no "environment:" block for frontend, since it
+# would silently do nothing here.
+
+services:
+  proxy:
+    image: nginx:1.27-alpine
+    restart: always
+    ports:
+      - 80:80
+      - 443:443
+    volumes:
+      - ./nginx-tls.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./certs:/etc/nginx/certs:ro
+    depends_on:
+      - frontend
+      - storage
+      - room
+
+  frontend:
+    image: excalidraw-frontend:arm64-v0.18.1-fork-b2
+    restart: always
+
+  storage:
+    image: excalidraw-storage-backend:arm64-v2023.11.11
+    restart: always
+    environment:
+      - PORT=8081
+    ports:
+      - 8081:8081
+
+  room:
+    image: excalidraw-room-go:arm64-v0.1.0
+    restart: always
+    environment:
+      - PORT=80
+    ports:
+      - 8082:80

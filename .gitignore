@@ -1,0 +1,6 @@
+
+# self-signed LAN cert, machine-specific -- do not publish
+basic/certs/
+
+# fetched fresh by `make clone`, not committed
+/build/
