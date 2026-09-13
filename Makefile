@@ -11,30 +11,18 @@
 #
 # Or step by step:
 #   make clone
-#   make build
+#   make build IP=10.0.0.1
 #   make certs IP=10.0.0.1
 #   make up
 #
-# IP is only needed for the TLS certificate (Live Collaboration requires
-# HTTPS, so the cert's IP must match whatever address you actually browse
-# to). The frontend image itself is address-independent -- it only ever
-# talks to whatever origin served the page, so one build works from any
-# address the cert (and your network) allows.
-#
-# To also reach it over a second address (e.g. a Tailscale IP in addition
-# to your LAN IP), pass TS_IP too -- it just adds another SAN to the same
-# cert, no rebuild of the frontend needed:
-#   make certs IP=10.0.0.1 TS_IP=100.x.x.x
-#
-# If the device's IP ever changes, just regenerate the cert:
-#   make certs IP=<new-IP>
-# (no need to rebuild or restart anything else).
+# IP must be this device's own LAN IP (the one other devices will browse
+# to). The frontend bundle and the TLS cert are both baked for that specific
+# IP, so if the device's IP ever changes, re-run `make build certs up`.
 
 DOCKER       ?= docker
 COMPOSE      ?= $(DOCKER) compose -f basic/docker-compose.arm64.yaml
 BUILD_DIR    := build
 CERT_DIR     := basic/certs
-comma        := ,
 
 FRONTEND_TAG := v0.18.1-fork-b2
 STORAGE_TAG  := v2023.11.11
@@ -43,9 +31,6 @@ ROOM_TAG     := v0.1.0
 FRONTEND_IMG := excalidraw-frontend:arm64-$(FRONTEND_TAG)
 STORAGE_IMG  := excalidraw-storage-backend:arm64-$(STORAGE_TAG)
 ROOM_IMG     := excalidraw-room-go:arm64-$(ROOM_TAG)
-
-TS_IP        ?=
-SANS         := IP:$(IP)$(if $(TS_IP),$(comma)IP:$(TS_IP))
 
 .PHONY: all install-docker clone patch \
         build build-frontend build-storage build-room \
@@ -85,23 +70,22 @@ $(BUILD_DIR)/excalidraw-storage-backend/.patched: Makefile
 		$(BUILD_DIR)/excalidraw-storage-backend/Dockerfile
 	touch $@
 
-# Frontend gets: (a) node:18 -> node:22 (unpinned transitive deps -- marked,
-# chevrotain -- now need newer Node than existed in 2023), and (b) fixed
-# relative-path ENV values instead of the upstream defaults (which point at
-# oss-collab.excalidraw.com / json.excalidraw.com). Relative paths, not a
-# baked-in https://<IP> -- fetch() resolves them against whatever origin
-# served the page, so this works from any address. VITE_APP_WS_SERVER_URL
-# is deliberately left unset: socket.io-client's own default already falls
-# back to window.location when no URL is given.
 $(BUILD_DIR)/excalidraw-frontend/.patched: Makefile
 	sed -i 's/^FROM node:18 AS build$$/FROM node:22 AS build/' $(BUILD_DIR)/excalidraw-frontend/Dockerfile
-	grep -q VITE_APP_HTTP_STORAGE_BACKEND_URL $(BUILD_DIR)/excalidraw-frontend/Dockerfile || \
+	grep -q VITE_APP_WS_SERVER_URL $(BUILD_DIR)/excalidraw-frontend/Dockerfile || \
 		sed -i '/^RUN yarn build:app:docker$$/i \
-ENV VITE_APP_BACKEND_V2_GET_URL=/api/v2/scenes/\
-ENV VITE_APP_BACKEND_V2_POST_URL=/api/v2/scenes/\
-ENV VITE_APP_HTTP_STORAGE_BACKEND_URL=/api/v2\
-ENV VITE_APP_STORAGE_BACKEND=http\
-ENV VITE_APP_FIREBASE_CONFIG={}' \
+ARG VITE_APP_BACKEND_V2_GET_URL\
+ARG VITE_APP_BACKEND_V2_POST_URL\
+ARG VITE_APP_WS_SERVER_URL\
+ARG VITE_APP_HTTP_STORAGE_BACKEND_URL\
+ARG VITE_APP_STORAGE_BACKEND\
+ARG VITE_APP_FIREBASE_CONFIG\
+ENV VITE_APP_BACKEND_V2_GET_URL=$$VITE_APP_BACKEND_V2_GET_URL\
+ENV VITE_APP_BACKEND_V2_POST_URL=$$VITE_APP_BACKEND_V2_POST_URL\
+ENV VITE_APP_WS_SERVER_URL=$$VITE_APP_WS_SERVER_URL\
+ENV VITE_APP_HTTP_STORAGE_BACKEND_URL=$$VITE_APP_HTTP_STORAGE_BACKEND_URL\
+ENV VITE_APP_STORAGE_BACKEND=$$VITE_APP_STORAGE_BACKEND\
+ENV VITE_APP_FIREBASE_CONFIG=$$VITE_APP_FIREBASE_CONFIG' \
 		$(BUILD_DIR)/excalidraw-frontend/Dockerfile
 	touch $@
 
@@ -109,7 +93,7 @@ ENV VITE_APP_FIREBASE_CONFIG={}' \
 
 check-ip:
 ifndef IP
-	$(error IP is not set. Usage: make certs IP=10.0.0.1)
+	$(error IP is not set. Usage: make build IP=10.0.0.1)
 endif
 
 build: build-room build-storage build-frontend
@@ -120,8 +104,15 @@ build-room: clone
 build-storage: clone
 	$(DOCKER) build -t $(STORAGE_IMG) $(BUILD_DIR)/excalidraw-storage-backend
 
-build-frontend: clone
-	$(DOCKER) build -t $(FRONTEND_IMG) $(BUILD_DIR)/excalidraw-frontend
+build-frontend: clone check-ip
+	$(DOCKER) build \
+		--build-arg VITE_APP_BACKEND_V2_GET_URL=https://$(IP)/api/v2/scenes/ \
+		--build-arg VITE_APP_BACKEND_V2_POST_URL=https://$(IP)/api/v2/scenes/ \
+		--build-arg VITE_APP_WS_SERVER_URL=https://$(IP) \
+		--build-arg VITE_APP_HTTP_STORAGE_BACKEND_URL=https://$(IP)/api/v2 \
+		--build-arg VITE_APP_STORAGE_BACKEND=http \
+		--build-arg VITE_APP_FIREBASE_CONFIG='{}' \
+		-t $(FRONTEND_IMG) $(BUILD_DIR)/excalidraw-frontend
 
 ## --- TLS cert (required: Live Collaboration needs a secure context) ----
 
@@ -129,7 +120,7 @@ certs: check-ip
 	mkdir -p $(CERT_DIR)
 	openssl req -x509 -nodes -newkey rsa:2048 -days 825 \
 		-keyout $(CERT_DIR)/privkey.pem -out $(CERT_DIR)/fullchain.pem \
-		-subj "/CN=$(IP)" -addext "subjectAltName=$(SANS)"
+		-subj "/CN=$(IP)" -addext "subjectAltName=IP:$(IP)"
 
 ## --- run -----------------------------------------------------------------
 
