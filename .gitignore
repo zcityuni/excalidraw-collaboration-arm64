@@ -4,3 +4,6 @@ basic/certs/
 
 # fetched fresh by `make clone`, not committed
 /build/
+
+# lab stack self-signed cert
+lab/certs/

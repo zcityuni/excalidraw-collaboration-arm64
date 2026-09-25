@@ -1,0 +1,194 @@
+diff --git a/src/app.module.ts b/src/app.module.ts
+index f5f4421..13c5206 100644
+--- a/src/app.module.ts
++++ b/src/app.module.ts
+@@ -4,10 +4,11 @@ import { ScenesController } from './scenes/scenes.controller';
+ import { StorageService } from './storage/storage.service';
+ import { RoomsController } from './rooms/rooms.controller';
+ import { FilesController } from './files/files.controller';
++import { BoardsController } from './boards/boards.controller';
+ 
+ @Module({
+   imports: [],
+-  controllers: [ScenesController, RoomsController, FilesController],
++  controllers: [ScenesController, RoomsController, FilesController, BoardsController],
+   providers: [StorageService],
+ })
+ export class AppModule {
+diff --git a/src/boards/boards.controller.ts b/src/boards/boards.controller.ts
+new file mode 100644
+index 0000000..84223ff
+--- /dev/null
++++ b/src/boards/boards.controller.ts
+@@ -0,0 +1,161 @@
++import {
++  BadRequestException,
++  Body,
++  Controller,
++  Delete,
++  Get,
++  Logger,
++  NotFoundException,
++  Param,
++  Put,
++} from '@nestjs/common';
++import { StorageNamespace, StorageService } from 'src/storage/storage.service';
++
++export interface Board {
++  roomId: string;
++  roomKey: string;
++  name: string;
++  createdAt: number;
++  lastOpenedAt: number;
++}
++
++interface UpsertBody {
++  roomKey?: string;
++  name?: string;
++  touch?: boolean;
++}
++
++// The whole list lives under one key: it's a small personal list, and one
++// key means a read-modify-write is the only consistency concern (see mutate).
++const INDEX_KEY = 'index';
++const ROOM_ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
++const ROOM_KEY_RE = /^[a-zA-Z0-9_-]{22}$/;
++const MAX_BOARDS = 500;
++const MAX_NAME_LENGTH = 100;
++const DEFAULT_NAME = 'Untitled board';
++
++// RawParserMiddleware turns any body without a JSON content-type into a Buffer.
++const parseBody = (body: unknown): UpsertBody => {
++  if (Buffer.isBuffer(body)) {
++    if (body.length === 0) {
++      return {};
++    }
++    try {
++      return JSON.parse(body.toString('utf8'));
++    } catch {
++      throw new BadRequestException('Body must be JSON');
++    }
++  }
++  return (body ?? {}) as UpsertBody;
++};
++
++@Controller('boards')
++export class BoardsController {
++  private readonly logger = new Logger(BoardsController.name);
++  private readonly namespace = StorageNamespace.BOARDS;
++  private lock: Promise<unknown> = Promise.resolve();
++
++  constructor(private storageService: StorageService) {}
++
++  private async read(): Promise<Board[]> {
++    const stored: unknown = await this.storageService.get(
++      INDEX_KEY,
++      this.namespace,
++    );
++    return Array.isArray(stored) ? stored.map((b) => ({ ...b })) : [];
++  }
++
++  private async write(boards: Board[]): Promise<void> {
++    await this.storageService.set(
++      INDEX_KEY,
++      boards as unknown as Buffer,
++      this.namespace,
++    );
++  }
++
++  // Serialise read-modify-write cycles so two concurrent saves can't drop
++  // each other's entry.
++  private mutate<T>(fn: (boards: Board[]) => T): Promise<T> {
++    const run = this.lock.then(async () => {
++      const boards = await this.read();
++      const result = fn(boards);
++      await this.write(boards);
++      return result;
++    });
++    this.lock = run.catch(() => undefined);
++    return run;
++  }
++
++  @Get()
++  async list(): Promise<Board[]> {
++    const boards = await this.read();
++    return boards.sort((a, b) => b.lastOpenedAt - a.lastOpenedAt);
++  }
++
++  @Put(':roomId')
++  async upsert(
++    @Param('roomId') roomId: string,
++    @Body() rawBody: unknown,
++  ): Promise<Board> {
++    if (!ROOM_ID_RE.test(roomId)) {
++      throw new BadRequestException('Invalid room id');
++    }
++    const body = parseBody(rawBody);
++    if (body.roomKey !== undefined && !ROOM_KEY_RE.test(body.roomKey)) {
++      throw new BadRequestException('Invalid room key');
++    }
++    let name: string | undefined;
++    if (body.name !== undefined) {
++      name = String(body.name).trim().slice(0, MAX_NAME_LENGTH);
++      if (!name) {
++        throw new BadRequestException('Name cannot be empty');
++      }
++    }
++
++    return this.mutate((boards) => {
++      const now = Date.now();
++      const existing = boards.find((b) => b.roomId === roomId);
++      if (existing) {
++        if (body.roomKey) {
++          existing.roomKey = body.roomKey;
++        }
++        if (name) {
++          existing.name = name;
++        }
++        if (body.touch) {
++          existing.lastOpenedAt = now;
++        }
++        return existing;
++      }
++      if (!body.roomKey) {
++        throw new BadRequestException('roomKey is required for a new board');
++      }
++      if (boards.length >= MAX_BOARDS) {
++        boards.sort((a, b) => b.lastOpenedAt - a.lastOpenedAt);
++        boards.splice(MAX_BOARDS - 1);
++      }
++      const board: Board = {
++        roomId,
++        roomKey: body.roomKey,
++        name: name ?? DEFAULT_NAME,
++        createdAt: now,
++        lastOpenedAt: now,
++      };
++      boards.push(board);
++      this.logger.debug(`Saved board ${roomId}`);
++      return board;
++    });
++  }
++
++  @Delete(':roomId')
++  async remove(@Param('roomId') roomId: string): Promise<{ roomId: string }> {
++    return this.mutate((boards) => {
++      const index = boards.findIndex((b) => b.roomId === roomId);
++      if (index === -1) {
++        throw new NotFoundException();
++      }
++      boards.splice(index, 1);
++      return { roomId };
++    });
++  }
++}
+diff --git a/src/storage/storage.service.ts b/src/storage/storage.service.ts
+index 6201d1e..937b19e 100644
+--- a/src/storage/storage.service.ts
++++ b/src/storage/storage.service.ts
+@@ -40,4 +40,5 @@ export enum StorageNamespace {
+   SCENES = 'SCENES',
+   ROOMS = 'ROOMS',
+   FILES = 'FILES',
++  BOARDS = 'BOARDS',
+ }

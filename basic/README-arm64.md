@@ -51,3 +51,27 @@ Just regenerate the cert — the app images don't need rebuilding:
 make certs IP=<new-IP>
 make up
 ```
+
+## Boards list
+
+Every live-collaboration room opened on the server is remembered server-side
+(in the same SQLite volume). Open it from the main menu → **Boards**: most
+recently opened first, with rename and remove. The server stores each room's
+ID and encryption key so the list can reopen boards — fine for a server you
+run yourself, but it does mean the server can read those boards.
+
+Implemented as `patches/*.patch`, applied to the upstream sources by
+`make clone`.
+
+## Lab stack
+
+To try changes without touching a running deployment, build `:lab` images
+and run the isolated stack on port 8443 (own project name and volume):
+
+```sh
+make clone
+make build FRONTEND_IMG=excalidraw-frontend:lab \
+  STORAGE_IMG=excalidraw-storage-backend:lab ROOM_IMG=excalidraw-room-go:lab
+# put a cert in lab/certs/ (fullchain.pem + privkey.pem), then:
+docker compose -f lab/docker-compose.lab.yaml up -d
+```

@@ -1,0 +1,367 @@
+diff --git a/excalidraw-app/App.tsx b/excalidraw-app/App.tsx
+index 01813bb..8d04d7d 100644
+--- a/excalidraw-app/App.tsx
++++ b/excalidraw-app/App.tsx
+@@ -88,6 +88,8 @@ import {
+   useHandleLibrary,
+ } from "@excalidraw/excalidraw/data/library";
+ import { AppMainMenu } from "./components/AppMainMenu";
++import { BoardsDialog } from "./components/BoardsDialog";
++import { isBoardsEnabled } from "./data/boards";
+ import { AppWelcomeScreen } from "./components/AppWelcomeScreen";
+ import { AppFooter } from "./components/AppFooter";
+ import {
+@@ -330,6 +332,7 @@ const initializeScene = async (opts: {
+ 
+ const ExcalidrawWrapper = () => {
+   const [errorMessage, setErrorMessage] = useState("");
++  const [isBoardsDialogOpen, setIsBoardsDialogOpen] = useState(false);
+   const isCollabDisabled = isRunningInIframe();
+ 
+   const { editorTheme, appTheme, setAppTheme } = useHandleAppTheme();
+@@ -865,6 +868,8 @@ const ExcalidrawWrapper = () => {
+       >
+         <AppMainMenu
+           onCollabDialogOpen={onCollabDialogOpen}
++          onBoardsDialogOpen={() => setIsBoardsDialogOpen(true)}
++          isBoardsEnabled={!isCollabDisabled && isBoardsEnabled()}
+           isCollaborating={isCollaborating}
+           isCollabEnabled={!isCollabDisabled}
+           theme={appTheme}
+@@ -904,6 +909,17 @@ const ExcalidrawWrapper = () => {
+             {t("alerts.collabOfflineWarning")}
+           </div>
+         )}
++        {isBoardsDialogOpen && (
++          <BoardsDialog
++            onClose={() => setIsBoardsDialogOpen(false)}
++            currentRoomId={
++              isCollaborating
++                ? getCollaborationLinkData(window.location.href)?.roomId ??
++                  null
++                : null
++            }
++          />
++        )}
+         {latestShareableLink && (
+           <ShareableLinkDialog
+             link={latestShareableLink}
+diff --git a/excalidraw-app/collab/Collab.tsx b/excalidraw-app/collab/Collab.tsx
+index 3e69124..e75200a 100644
+--- a/excalidraw-app/collab/Collab.tsx
++++ b/excalidraw-app/collab/Collab.tsx
+@@ -49,6 +49,7 @@ import {
+   getSyncableElements,
+ } from "../data";
+ import { getStorageBackend, storageBackend } from "../data/config";
++import { isBoardsEnabled, recordBoard } from "../data/boards";
+ import {
+   importUsernameFromLocalStorage,
+   saveUsernameToLocalStorage,
+@@ -485,6 +486,12 @@ class Collab extends PureComponent<CollabProps, CollabState> {
+       );
+     }
+ 
++    if (isBoardsEnabled()) {
++      recordBoard(roomId, roomKey).catch((error) =>
++        console.error("Failed to record board", error),
++      );
++    }
++
+     // TODO: `ImportedDataState` type here seems abused
+     const scenePromise = resolvablePromise<
+       | (ImportedDataState & { elements: readonly OrderedExcalidrawElement[] })
+diff --git a/excalidraw-app/components/AppMainMenu.tsx b/excalidraw-app/components/AppMainMenu.tsx
+index cb741cf..6ec80f6 100644
+--- a/excalidraw-app/components/AppMainMenu.tsx
++++ b/excalidraw-app/components/AppMainMenu.tsx
+@@ -3,6 +3,7 @@ import {
+   loginIcon,
+   ExcalLogo,
+   eyeIcon,
++  LibraryIcon,
+ } from "@excalidraw/excalidraw/components/icons";
+ import type { Theme } from "@excalidraw/excalidraw/element/types";
+ import { MainMenu } from "@excalidraw/excalidraw/index";
+@@ -12,6 +13,8 @@ import { saveDebugState } from "./DebugCanvas";
+ 
+ export const AppMainMenu: React.FC<{
+   onCollabDialogOpen: () => any;
++  onBoardsDialogOpen: () => any;
++  isBoardsEnabled: boolean;
+   isCollaborating: boolean;
+   isCollabEnabled: boolean;
+   theme: Theme | "system";
+@@ -30,6 +33,14 @@ export const AppMainMenu: React.FC<{
+           onSelect={() => props.onCollabDialogOpen()}
+         />
+       )}
++      {props.isBoardsEnabled && (
++        <MainMenu.Item
++          icon={LibraryIcon}
++          onSelect={() => props.onBoardsDialogOpen()}
++        >
++          Boards
++        </MainMenu.Item>
++      )}
+       <MainMenu.DefaultItems.CommandPalette className="highlighted" />
+       <MainMenu.DefaultItems.SearchMenu />
+       <MainMenu.DefaultItems.Help />
+diff --git a/excalidraw-app/components/BoardsDialog.scss b/excalidraw-app/components/BoardsDialog.scss
+new file mode 100644
+index 0000000..ef78c03
+--- /dev/null
++++ b/excalidraw-app/components/BoardsDialog.scss
+@@ -0,0 +1,69 @@
++.excalidraw {
++  .BoardsDialog {
++    &__hint {
++      margin-top: 0;
++      color: var(--color-gray-60, #666);
++      font-size: 0.875rem;
++    }
++
++    &__error {
++      color: var(--color-danger, #db6965);
++    }
++
++    &__list {
++      list-style: none;
++      margin: 0;
++      padding: 0;
++      display: flex;
++      flex-direction: column;
++      gap: 0.5rem;
++    }
++
++    &__item {
++      display: flex;
++      align-items: stretch;
++      gap: 0.5rem;
++
++      button {
++        border: 1px solid var(--default-border-color, #ccc);
++        border-radius: var(--border-radius-lg, 8px);
++        background: var(--island-bg-color, transparent);
++        color: var(--text-primary-color, inherit);
++        padding: 0.5rem 0.75rem;
++        cursor: pointer;
++        font: inherit;
++
++        &:hover:not(:disabled) {
++          border-color: var(--color-primary, #6965db);
++        }
++
++        &:disabled {
++          cursor: default;
++          opacity: 0.7;
++        }
++      }
++    }
++
++    &__open {
++      flex: 1;
++      min-width: 0;
++      display: flex;
++      flex-direction: column;
++      align-items: flex-start;
++      text-align: left;
++    }
++
++    &__name {
++      font-weight: 600;
++      overflow: hidden;
++      text-overflow: ellipsis;
++      white-space: nowrap;
++      max-width: 100%;
++    }
++
++    &__meta {
++      font-size: 0.75rem;
++      color: var(--color-gray-60, #666);
++    }
++  }
++}
+diff --git a/excalidraw-app/components/BoardsDialog.tsx b/excalidraw-app/components/BoardsDialog.tsx
+new file mode 100644
+index 0000000..4becc9e
+--- /dev/null
++++ b/excalidraw-app/components/BoardsDialog.tsx
+@@ -0,0 +1,124 @@
++import React, { useCallback, useEffect, useState } from "react";
++import { Dialog } from "@excalidraw/excalidraw/components/Dialog";
++import type { Board } from "../data/boards";
++import {
++  deleteBoard,
++  getBoardLink,
++  listBoards,
++  renameBoard,
++} from "../data/boards";
++
++import "./BoardsDialog.scss";
++
++const formatDate = (timestamp: number) =>
++  new Date(timestamp).toLocaleString(undefined, {
++    dateStyle: "medium",
++    timeStyle: "short",
++  });
++
++export const BoardsDialog = ({
++  onClose,
++  currentRoomId,
++}: {
++  onClose: () => void;
++  currentRoomId: string | null;
++}) => {
++  const [boards, setBoards] = useState<Board[] | null>(null);
++  const [error, setError] = useState<string | null>(null);
++
++  const refresh = useCallback(async () => {
++    try {
++      setBoards(await listBoards());
++      setError(null);
++    } catch (err: any) {
++      setError(err.message);
++    }
++  }, []);
++
++  useEffect(() => {
++    refresh();
++  }, [refresh]);
++
++  const openBoard = (board: Board) => {
++    window.location.href = getBoardLink(board);
++    window.location.reload();
++  };
++
++  const onRename = async (board: Board) => {
++    const name = window.prompt("Board name", board.name);
++    if (name === null || !name.trim()) {
++      return;
++    }
++    try {
++      await renameBoard(board.roomId, name.trim());
++      await refresh();
++    } catch (err: any) {
++      setError(err.message);
++    }
++  };
++
++  const onDelete = async (board: Board) => {
++    if (
++      !window.confirm(
++        `Remove "${board.name}" from this list? The drawing itself isn't deleted — anyone with its link can still open it.`,
++      )
++    ) {
++      return;
++    }
++    try {
++      await deleteBoard(board.roomId);
++      await refresh();
++    } catch (err: any) {
++      setError(err.message);
++    }
++  };
++
++  return (
++    <Dialog onCloseRequest={onClose} title="Boards" size="small">
++      <div className="BoardsDialog">
++        <p className="BoardsDialog__hint">
++          Every live-collaboration room opened on this server shows up here,
++          most recent first.
++        </p>
++        {error && <p className="BoardsDialog__error">{error}</p>}
++        {boards === null && !error && <p>Loading…</p>}
++        {boards?.length === 0 && (
++          <p>No boards yet — start a live collaboration session to add one.</p>
++        )}
++        {boards && boards.length > 0 && (
++          <ul className="BoardsDialog__list">
++            {boards.map((board) => (
++              <li key={board.roomId} className="BoardsDialog__item">
++                <button
++                  type="button"
++                  className="BoardsDialog__open"
++                  onClick={() => openBoard(board)}
++                  disabled={board.roomId === currentRoomId}
++                  title={
++                    board.roomId === currentRoomId
++                      ? "You're on this board"
++                      : "Open this board"
++                  }
++                >
++                  <span className="BoardsDialog__name">
++                    {board.name}
++                    {board.roomId === currentRoomId && " (current)"}
++                  </span>
++                  <span className="BoardsDialog__meta">
++                    Last opened {formatDate(board.lastOpenedAt)}
++                  </span>
++                </button>
++                <button type="button" onClick={() => onRename(board)}>
++                  Rename
++                </button>
++                <button type="button" onClick={() => onDelete(board)}>
++                  Remove
++                </button>
++              </li>
++            ))}
++          </ul>
++        )}
++      </div>
++    </Dialog>
++  );
++};
+diff --git a/excalidraw-app/data/boards.ts b/excalidraw-app/data/boards.ts
+new file mode 100644
+index 0000000..1224310
+--- /dev/null
++++ b/excalidraw-app/data/boards.ts
+@@ -0,0 +1,47 @@
++import { getCollaborationLink } from ".";
++
++export type Board = {
++  roomId: string;
++  roomKey: string;
++  name: string;
++  createdAt: number;
++  lastOpenedAt: number;
++};
++
++const BOARDS_URL = `${import.meta.env.VITE_APP_HTTP_STORAGE_BACKEND_URL}/boards`;
++
++export const isBoardsEnabled = () =>
++  import.meta.env.VITE_APP_STORAGE_BACKEND === "http";
++
++const request = async <T>(path: string, init?: RequestInit): Promise<T> => {
++  const response = await fetch(`${BOARDS_URL}${path}`, {
++    ...init,
++    headers: { "Content-Type": "application/json", ...init?.headers },
++  });
++  if (!response.ok) {
++    throw new Error(`Boards request failed (${response.status})`);
++  }
++  return response.json();
++};
++
++export const listBoards = () => request<Board[]>("");
++
++export const recordBoard = (roomId: string, roomKey: string) =>
++  request<Board>(`/${encodeURIComponent(roomId)}`, {
++    method: "PUT",
++    body: JSON.stringify({ roomKey, touch: true }),
++  });
++
++export const renameBoard = (roomId: string, name: string) =>
++  request<Board>(`/${encodeURIComponent(roomId)}`, {
++    method: "PUT",
++    body: JSON.stringify({ name }),
++  });
++
++export const deleteBoard = (roomId: string) =>
++  request<{ roomId: string }>(`/${encodeURIComponent(roomId)}`, {
++    method: "DELETE",
++  });
++
++export const getBoardLink = (board: Board) =>
++  getCollaborationLink({ roomId: board.roomId, roomKey: board.roomKey });
