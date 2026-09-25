@@ -65,16 +65,10 @@ Implemented as `patches/*.patch`, applied to the upstream sources by
 
 ## Lab stack
 
-To try changes without touching a running deployment, build `:lab` images
-and run the isolated stack on port 8443 (own project name and volume):
-
-```sh
-make clone
-make build FRONTEND_IMG=excalidraw-frontend:lab \
-  STORAGE_IMG=excalidraw-storage-backend:lab ROOM_IMG=excalidraw-room-go:lab
-# put a cert in lab/certs/ (fullchain.pem + privkey.pem), then:
-docker compose -f lab/docker-compose.lab.yaml up -d
-```
+To try changes without touching a running deployment, see
+[`lab/README.md`](../lab/README.md): an isolated copy of the stack on port
+8443 with its own images and storage, plus how to promote a tested build to
+live and how to tear it down.
 
 ## Only reachable over Tailscale
 
