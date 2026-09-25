@@ -7,12 +7,12 @@
 # is needed.
 #
 # Usage:
-#   make all IP=10.0.0.1
+#   make all IP=<your-ip>
 #
 # Or step by step:
 #   make clone
 #   make build
-#   make certs IP=10.0.0.1
+#   make certs IP=<your-ip>
 #   make up
 #
 # IP is only needed for the TLS certificate (Live Collaboration requires
@@ -24,7 +24,7 @@
 # To also reach it over a second address (e.g. a Tailscale IP in addition
 # to your LAN IP), pass TS_IP too -- it just adds another SAN to the same
 # cert, no rebuild of the frontend needed:
-#   make certs IP=10.0.0.1 TS_IP=100.x.x.x
+#   make certs IP=<your-ip> TS_IP=100.x.x.x
 #
 # If the device's IP ever changes, just regenerate the cert:
 #   make certs IP=<new-IP>
@@ -119,7 +119,7 @@ ENV VITE_APP_FIREBASE_CONFIG={}' \
 
 check-ip:
 ifndef IP
-	$(error IP is not set. Usage: make certs IP=10.0.0.1)
+	$(error IP is not set. Usage: make certs IP=<your-ip>)
 endif
 
 build: build-room build-storage build-frontend
