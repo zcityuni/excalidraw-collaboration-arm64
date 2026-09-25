@@ -75,3 +75,18 @@ make build FRONTEND_IMG=excalidraw-frontend:lab \
 # put a cert in lab/certs/ (fullchain.pem + privkey.pem), then:
 docker compose -f lab/docker-compose.lab.yaml up -d
 ```
+
+## Only reachable over Tailscale
+
+To keep the stack off your LAN and serve it through Tailscale instead
+(trusted HTTPS, tailnet-only access):
+
+```sh
+echo "BIND_ADDR=127.0.0.1" > basic/.env
+make up
+sudo tailscale serve --bg --https=443 https+insecure://127.0.0.1:443
+```
+
+Then open `https://<device>.<tailnet>.ts.net`. Use `127.0.0.1`, not
+`localhost`: `localhost` can resolve to the IPv6 `::1`, where nothing is
+listening.

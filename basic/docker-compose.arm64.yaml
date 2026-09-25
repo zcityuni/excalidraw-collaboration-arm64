@@ -13,9 +13,13 @@ services:
   proxy:
     image: nginx:1.27-alpine
     restart: always
+    # BIND_ADDR (set in basic/.env) picks which interface the proxy listens
+    # on. Default is all interfaces (reachable on the LAN). Set it to
+    # 127.0.0.1 when fronting this with `tailscale serve` so it's only
+    # reachable over the tailnet.
     ports:
-      - 80:80
-      - 443:443
+      - ${BIND_ADDR:-0.0.0.0}:80:80
+      - ${BIND_ADDR:-0.0.0.0}:443:443
     volumes:
       - ./nginx-tls.conf:/etc/nginx/conf.d/default.conf:ro
       - ./certs:/etc/nginx/certs:ro

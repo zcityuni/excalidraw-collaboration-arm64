@@ -7,3 +7,6 @@ basic/certs/
 
 # lab stack self-signed cert
 lab/certs/
+
+# per-host settings (e.g. BIND_ADDR)
+basic/.env
