@@ -69,6 +69,15 @@ docker-compose -f basic/docker-compose.yaml down
 Use [basic/docker-compose.yaml](basic/docker-compose.yaml). It exposes the
 frontend, storage backend, and room service on separate local ports.
 
+### Build from source (arm64, fully self-hosted)
+
+The published images are `linux/amd64` only. To run on a Raspberry Pi or other
+arm64 machine, `make all HOSTS=<lan-ip>` builds all three services from source
+with a TLS proxy, SQLite storage and a **Boards** list of recent rooms, and
+pins every frontend URL to your own server (a build left on upstream defaults
+quietly uses excalidraw.com's Firebase and collaboration relay). See
+[basic/README-arm64.md](basic/README-arm64.md).
+
 ### One-domain HTTPS deployment
 
 Use [advanced-nginx/compose.yml](advanced-nginx/compose.yml) together with

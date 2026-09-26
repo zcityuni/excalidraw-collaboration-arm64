@@ -15,10 +15,9 @@ its own:
 The one thing it shares with live is CPU: builds make the Pi busy for a few
 minutes.
 
-> **Always build with the `:lab` image tags.** The Makefile's default tags are
-> the same ones live uses. Building under those names doesn't change running
-> containers, but the next time live restarts it would pick up whatever you
-> built.
+> **Always build with `TAG=lab`.** Without it, `make build` uses the same image
+> tags as live. That doesn't change running containers, but the next time live
+> restarts it would pick up whatever you built.
 
 ## Bring it up
 
@@ -34,18 +33,11 @@ cd ~/excalidraw-lab
 make clone
 
 # build under :lab tags -- never the default (live) tags
-make build DOCKER="sudo docker" \
-  FRONTEND_IMG=excalidraw-frontend:lab \
-  STORAGE_IMG=excalidraw-storage-backend:lab \
-  ROOM_IMG=excalidraw-room-go:lab
+make build TAG=lab DOCKER="sudo docker"
 
-# self-signed cert for nginx (tailscale serve sits in front, so this is
-# only ever seen by tailscale itself)
-mkdir -p lab/certs
-openssl req -x509 -nodes -newkey rsa:2048 -days 825 \
-  -keyout lab/certs/privkey.pem -out lab/certs/fullchain.pem \
-  -subj "/CN=<host>.<tailnet>.ts.net" \
-  -addext "subjectAltName=DNS:<host>.<tailnet>.ts.net"
+# self-signed cert for the lab's nginx (tailscale serve sits in front, so
+# it's only ever seen by tailscale itself)
+make certs HOSTS=localhost CERT_DIR=lab/certs
 
 # start it (run from the repo root; the compose file uses ../basic paths)
 sudo docker compose -f lab/docker-compose.lab.yaml up -d
@@ -56,8 +48,8 @@ sudo tailscale serve --bg --https=8443 https+insecure://127.0.0.1:8443
 
 Open `https://<host>.<tailnet>.ts.net:8443`.
 
-To try a code change: edit the source under `build/`, rebuild just the image
-you changed with its `:lab` tag, then
+To try a code change: edit the source under `build/`, rebuild just that image
+(`make build-frontend TAG=lab`, etc.), then
 `sudo docker compose -f lab/docker-compose.lab.yaml up -d` again. Once it
 works, regenerate the matching file in `patches/` (see below) so the change
 survives a fresh `make clone`.
@@ -76,16 +68,27 @@ rooms, boards, scenes) against the live URL lands in live data.
 
 ## Turning source edits into patches
 
-The Boards feature (and any future source change) lives in `patches/` and is
-applied by `make clone`. After editing under `build/`:
+Every change to upstream code lives in `patches/<component>/` and is applied in
+filename order by `make clone`, which first resets the sources to pristine
+upstream. So edits under `build/` are lost on the next `make clone` unless they
+are captured in a patch.
+
+To turn an edit into a new patch, snapshot the patched state in git's index
+(never commit inside `build/`), edit, then diff against that snapshot:
 
 ```sh
-cd build/excalidraw-frontend        # or build/excalidraw-storage-backend
-git add -N <any new files>           # so git diff includes them
-git diff -- excalidraw-app > ../../patches/frontend-boards.patch   # or: -- src
+cd build/excalidraw-frontend              # or build/excalidraw-storage-backend
+git add -A                                # snapshot: sources as patched by make clone
+# ... edit, rebuild with TAG=lab, test ...
+git add -N .                              # include any new files in the diff
+git diff > ../../patches/excalidraw-frontend/03-my-change.patch
 ```
 
-Test it applies cleanly to fresh upstream source:
+`git diff` compares against the snapshot, so the new patch holds only your
+edits. `make clone` resets the index along with the files, so the snapshot
+can't leak into the next build.
+
+Check that the full set applies cleanly to fresh upstream source:
 
 ```sh
 make clone BUILD_DIR=/tmp/labtest && rm -rf /tmp/labtest

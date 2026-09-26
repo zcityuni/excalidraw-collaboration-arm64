@@ -1,0 +1,35 @@
+Frontend Dockerfile changes.
+
+- node:18 -> node:22: unpinned transitive dependencies (marked, chevrotain)
+  now require a newer Node than existed when this release was cut.
+- Pin every VITE_APP_* value the self-hosted setup depends on. Vite inlines
+  these into the static bundle at build time; anything left unset is filled
+  from upstream's .env.production, which points at excalidraw.com's public
+  services (Firebase storage, the oss-collab websocket relay).
+  URLs are relative, so one build works from any address the proxy serves.
+  WS_SERVER_URL=/ means "the page's own host"; nginx routes /socket.io/ to
+  the room server.
+
+diff --git a/Dockerfile b/Dockerfile
+index 2716803..6b6ab66 100644
+--- a/Dockerfile
++++ b/Dockerfile
+@@ -1,4 +1,4 @@
+-FROM node:18 AS build
++FROM node:22 AS build
+ 
+ WORKDIR /opt/node_app
+ 
+@@ -10,6 +10,12 @@ RUN yarn --network-timeout 600000
+ 
+ ARG NODE_ENV=production
+ 
++ENV VITE_APP_BACKEND_V2_GET_URL=/api/v2/scenes/
++ENV VITE_APP_BACKEND_V2_POST_URL=/api/v2/scenes/
++ENV VITE_APP_HTTP_STORAGE_BACKEND_URL=/api/v2
++ENV VITE_APP_WS_SERVER_URL=/
++ENV VITE_APP_STORAGE_BACKEND=http
++ENV VITE_APP_FIREBASE_CONFIG={}
+ RUN yarn build:app:docker
+ 
+ FROM nginx:1.27-alpine

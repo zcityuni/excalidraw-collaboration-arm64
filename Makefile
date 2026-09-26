@@ -1,59 +1,43 @@
-# arm64 self-host build for excalidraw-collaboration (any arm64 device --
-# Raspberry Pi, other SBCs, arm64 VPS, etc).
+# Self-hosted excalidraw-collaboration, built natively (arm64 or amd64).
 #
-# The upstream images in basic/docker-compose.yaml only publish linux/amd64
-# manifests, so this builds all three services natively for arm64 instead.
-# See basic/README-arm64.md for the full explanation of why each step below
-# is needed.
+#   make all HOSTS=<lan-ip>          clone, patch, build, make a cert, start
 #
-# Usage:
-#   make all IP=<your-ip>
+# Step by step:
+#   make clone                        fetch upstream sources + apply patches/
+#   make build                        build the three images
+#   make certs HOSTS="<ip> <name>"    self-signed TLS cert for those addresses
+#   make up / down / ps / logs
 #
-# Or step by step:
-#   make clone
-#   make build
-#   make certs IP=<your-ip>
-#   make up
-#
-# IP is only needed for the TLS certificate (Live Collaboration requires
-# HTTPS, so the cert's IP must match whatever address you actually browse
-# to). The frontend image itself is address-independent -- it only ever
-# talks to whatever origin served the page, so one build works from any
-# address the cert (and your network) allows.
-#
-# To also reach it over a second address (e.g. a Tailscale IP in addition
-# to your LAN IP), pass TS_IP too -- it just adds another SAN to the same
-# cert, no rebuild of the frontend needed:
-#   make certs IP=<your-ip> TS_IP=100.x.x.x
-#
-# If the device's IP ever changes, just regenerate the cert:
-#   make certs IP=<new-IP>
-# (no need to rebuild or restart anything else).
+# HOSTS is only used for the TLS certificate: the IPs and/or hostnames people
+# will open in their browser. The images themselves are address-independent.
+# See basic/README-arm64.md.
 
-DOCKER       ?= docker
-COMPOSE      ?= $(DOCKER) compose -f basic/docker-compose.arm64.yaml
-BUILD_DIR    := build
-CERT_DIR     := basic/certs
-comma        := ,
+DOCKER    ?= docker
+COMPOSE   ?= $(DOCKER) compose -f basic/docker-compose.arm64.yaml
+BUILD_DIR := build
+CERT_DIR  := basic/certs
 
-FRONTEND_TAG := v0.18.1-fork-b2
-STORAGE_TAG  := v2023.11.11
-ROOM_TAG     := v0.1.0
+# Upstream sources, pinned to the releases the patches were written against.
+FRONTEND_REPO := https://github.com/alswl/excalidraw.git
+FRONTEND_REF  := v0.18.1-fork-b2
+STORAGE_REPO  := https://github.com/alswl/excalidraw-storage-backend.git
+STORAGE_REF   := v2023.11.11
+ROOM_REPO     := https://github.com/alswl/excalidraw-room-go.git
+ROOM_REF      := v0.1.0
 
-FRONTEND_IMG := excalidraw-frontend:arm64-$(FRONTEND_TAG)
-STORAGE_IMG  := excalidraw-storage-backend:arm64-$(STORAGE_TAG)
-ROOM_IMG     := excalidraw-room-go:arm64-$(ROOM_TAG)
+# TAG overrides all three image tags at once, e.g. `make build TAG=lab`.
+FRONTEND_IMG := excalidraw-frontend:$(or $(TAG),arm64-$(FRONTEND_REF))
+STORAGE_IMG  := excalidraw-storage-backend:$(or $(TAG),arm64-$(STORAGE_REF))
+ROOM_IMG     := excalidraw-room-go:$(or $(TAG),arm64-$(ROOM_REF))
 
-TS_IP        ?=
-SANS         := IP:$(IP)$(if $(TS_IP),$(comma)IP:$(TS_IP))
+COMPONENTS := excalidraw-frontend excalidraw-storage-backend excalidraw-room-go
 
-.PHONY: all install-docker clone patch \
-        build build-frontend build-storage build-room \
-        certs up down restart ps logs clean distclean check-ip
+.PHONY: all install-docker clone patch build build-frontend build-storage \
+        build-room certs up down restart ps logs clean distclean
 
 all: clone build certs up
 
-## --- one-time host setup -----------------------------------------------
+## --- one-time host setup (Debian / Raspberry Pi OS) ------------------------
 
 install-docker:
 	curl -fsSL https://download.docker.com/linux/debian/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
@@ -64,94 +48,63 @@ install-docker:
 	sudo usermod -aG docker $$USER
 	@echo "Log out and back in for group membership to take effect, then re-run make."
 
-## --- fetch + patch upstream source --------------------------------------
+## --- fetch + patch upstream source ------------------------------------------
 
 clone:
-	mkdir -p $(BUILD_DIR)
-	[ -d $(BUILD_DIR)/excalidraw-frontend ] || \
-		git clone --depth 1 --branch $(FRONTEND_TAG) https://github.com/alswl/excalidraw.git $(BUILD_DIR)/excalidraw-frontend
-	[ -d $(BUILD_DIR)/excalidraw-storage-backend ] || \
-		git clone --depth 1 --branch $(STORAGE_TAG) https://github.com/alswl/excalidraw-storage-backend.git $(BUILD_DIR)/excalidraw-storage-backend
-	[ -d $(BUILD_DIR)/excalidraw-room-go ] || \
-		git clone --depth 1 --branch $(ROOM_TAG) https://github.com/alswl/excalidraw-room-go.git $(BUILD_DIR)/excalidraw-room-go
-	$(MAKE) patch
+	@mkdir -p $(BUILD_DIR)
+	@[ -d $(BUILD_DIR)/excalidraw-frontend ] || git clone --depth 1 --branch $(FRONTEND_REF) $(FRONTEND_REPO) $(BUILD_DIR)/excalidraw-frontend
+	@[ -d $(BUILD_DIR)/excalidraw-storage-backend ] || git clone --depth 1 --branch $(STORAGE_REF) $(STORAGE_REPO) $(BUILD_DIR)/excalidraw-storage-backend
+	@[ -d $(BUILD_DIR)/excalidraw-room-go ] || git clone --depth 1 --branch $(ROOM_REF) $(ROOM_REPO) $(BUILD_DIR)/excalidraw-room-go
+	@$(MAKE) --no-print-directory patch
 
-patch: $(BUILD_DIR)/excalidraw-storage-backend/.patched $(BUILD_DIR)/excalidraw-frontend/.patched
+patch: $(foreach c,$(COMPONENTS),$(BUILD_DIR)/$(c)/.patched)
 
-# Every patch run starts from pristine upstream source (git checkout + clean
-# in the shallow clone), then applies everything below unconditionally. No
-# "is it already patched?" guessing: a build/ dir left over from an older
-# version of this Makefile gets fully reset instead of half-skipped.
-define reset-source
-	git -C $(BUILD_DIR)/$(1) checkout -q -- .
-	git -C $(BUILD_DIR)/$(1) clean -fdq
-endef
+# Each component is reset to pristine upstream source, then every file in
+# patches/<component>/ is applied in order. Re-runs whenever the Makefile or a
+# patch changes, and never builds on top of a half-patched tree.
+.SECONDEXPANSION:
+$(BUILD_DIR)/%/.patched: Makefile $$(wildcard patches/%/*.patch)
+	git -C $(@D) reset -q --hard
+	git -C $(@D) clean -fdq
+	@for p in $(sort $(wildcard patches/$*/*.patch)); do \
+		echo "applying $$p"; git -C $(@D) apply $(CURDIR)/$$p || exit 1; \
+	done
+	@touch $@
 
-$(BUILD_DIR)/excalidraw-storage-backend/.patched: Makefile patches/storage-backend-boards.patch
-	$(call reset-source,excalidraw-storage-backend)
-	sed -i 's/npm install -g @nestjs\/cli$$/npm install -g @nestjs\/cli@8/' $(BUILD_DIR)/excalidraw-storage-backend/Dockerfile
-	sed -i '/^USER node$$/i RUN mkdir -p /app/data \&\& chown node:node /app/data\n' \
-		$(BUILD_DIR)/excalidraw-storage-backend/Dockerfile
-	git -C $(BUILD_DIR)/excalidraw-storage-backend apply $(CURDIR)/patches/storage-backend-boards.patch
-	touch $@
-
-# Frontend gets: (a) node:18 -> node:22 (unpinned transitive deps -- marked,
-# chevrotain -- now need newer Node than existed in 2023), and (b) fixed
-# relative-path ENV values instead of the upstream defaults (which point at
-# oss-collab.excalidraw.com / json.excalidraw.com). Relative paths, not a
-# baked-in https://<IP> -- fetch() resolves them against whatever origin
-# served the page, so this works from any address. VITE_APP_WS_SERVER_URL=/
-# makes socket.io connect to the page's own host (nginx routes /socket.io/
-# to the room server). Every value here must be set explicitly: anything
-# left unset is filled from upstream's .env.production, which points at
-# excalidraw.com's public servers (e.g. oss-collab.excalidraw.com).
-$(BUILD_DIR)/excalidraw-frontend/.patched: Makefile patches/frontend-boards.patch
-	$(call reset-source,excalidraw-frontend)
-	sed -i 's/^FROM node:18 AS build$$/FROM node:22 AS build/' $(BUILD_DIR)/excalidraw-frontend/Dockerfile
-	sed -i '/^RUN yarn build:app:docker$$/i \
-ENV VITE_APP_BACKEND_V2_GET_URL=/api/v2/scenes/\
-ENV VITE_APP_BACKEND_V2_POST_URL=/api/v2/scenes/\
-ENV VITE_APP_HTTP_STORAGE_BACKEND_URL=/api/v2\
-ENV VITE_APP_WS_SERVER_URL=/\
-ENV VITE_APP_STORAGE_BACKEND=http\
-ENV VITE_APP_FIREBASE_CONFIG={}' \
-		$(BUILD_DIR)/excalidraw-frontend/Dockerfile
-	git -C $(BUILD_DIR)/excalidraw-frontend apply $(CURDIR)/patches/frontend-boards.patch
-	touch $@
-
-## --- build images natively for arm64 ------------------------------------
-
-check-ip:
-ifndef IP
-	$(error IP is not set. Usage: make certs IP=<your-ip>)
-endif
+## --- build ------------------------------------------------------------------
 
 build: build-room build-storage build-frontend
 
 build-room: clone
-	$(DOCKER) build --build-arg VERSION=$(ROOM_TAG) -t $(ROOM_IMG) $(BUILD_DIR)/excalidraw-room-go
+	$(DOCKER) build --build-arg VERSION=$(ROOM_REF) -t $(ROOM_IMG) $(BUILD_DIR)/excalidraw-room-go
 
 build-storage: clone
 	$(DOCKER) build -t $(STORAGE_IMG) $(BUILD_DIR)/excalidraw-storage-backend
 
+# Anything the frontend doesn't pin falls back to excalidraw.com's public
+# services (Firebase storage, the oss-collab relay). Refuse to build without
+# the two settings that keep it self-hosted.
 build-frontend: clone
-	@# Unpinned values compile to "" or to excalidraw.com's public servers
-	@# (Firebase storage, oss-collab websocket). Refuse to build unless pinned.
 	@for line in 'ENV VITE_APP_STORAGE_BACKEND=http' 'ENV VITE_APP_WS_SERVER_URL=/'; do \
 		grep -qx "$$line" $(BUILD_DIR)/excalidraw-frontend/Dockerfile || \
-		{ echo "ERROR: frontend Dockerfile is missing '$$line'; run 'make clean clone'"; exit 1; }; \
+		{ echo "ERROR: frontend Dockerfile is missing '$$line' -- run 'make clean clone'"; exit 1; }; \
 	done
 	$(DOCKER) build -t $(FRONTEND_IMG) $(BUILD_DIR)/excalidraw-frontend
 
-## --- TLS cert (required: Live Collaboration needs a secure context) ----
+## --- TLS certificate (Live Collaboration needs HTTPS) ------------------------
 
-certs: check-ip
-	mkdir -p $(CERT_DIR)
+certs:
+	@[ -n "$(HOSTS)" ] || { echo 'Usage: make certs HOSTS="<ip-or-hostname> [...]"'; exit 1; }
+	@mkdir -p $(CERT_DIR)
+	@sans=""; for h in $(HOSTS); do \
+		case $$h in *[!0-9.]*) sans="$$sans,DNS:$$h";; *) sans="$$sans,IP:$$h";; esac; \
+	done; \
 	openssl req -x509 -nodes -newkey rsa:2048 -days 825 \
 		-keyout $(CERT_DIR)/privkey.pem -out $(CERT_DIR)/fullchain.pem \
-		-subj "/CN=$(IP)" -addext "subjectAltName=$(SANS)"
+		-subj "/CN=$(firstword $(HOSTS))" -addext "subjectAltName=$${sans#,}" 2>/dev/null && \
+	echo "certificate for: $${sans#,}"
 
-## --- run -----------------------------------------------------------------
+## --- run --------------------------------------------------------------------
 
 up:
 	$(COMPOSE) up -d
@@ -167,11 +120,12 @@ ps:
 logs:
 	$(COMPOSE) logs -f --tail 50
 
-## --- cleanup ---------------------------------------------------------------
+## --- cleanup ----------------------------------------------------------------
 
 clean:
 	rm -rf $(BUILD_DIR)
 
+# Removes the containers, images and certificate. Keeps the storage volume.
 distclean: down clean
 	rm -rf $(CERT_DIR)
 	$(DOCKER) image rm -f $(FRONTEND_IMG) $(STORAGE_IMG) $(ROOM_IMG) 2>/dev/null || true

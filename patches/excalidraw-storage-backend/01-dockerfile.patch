@@ -1,0 +1,30 @@
+Storage backend Dockerfile changes.
+
+- Pin the globally installed Nest CLI to v8 to match the project's own
+  @nestjs/cli ^8. Unpinned, it installs a current CLI whose TypeScript is
+  too new for this source.
+- Pre-create /app/data owned by the container's non-root user, so a volume
+  mounted there is writable for the SQLite database.
+
+diff --git a/Dockerfile b/Dockerfile
+index 71a6154..6e25ffa 100644
+--- a/Dockerfile
++++ b/Dockerfile
+@@ -16,7 +16,7 @@ RUN if [[ "$CHINA_MIRROR" = "true" ]] ; then \
+ 
+ RUN apk add --update python3 make g++ curl
+ RUN npm install -g eslint
+-RUN npm install -g @nestjs/cli
++RUN npm install -g @nestjs/cli@8
+ 
+ WORKDIR /app
+ 
+@@ -37,6 +37,8 @@ COPY --from=builder /app/package.json /app/package.json
+ COPY --from=builder /app/dist /app/dist
+ COPY --from=builder /app/node_modules /app/node_modules
+ 
++RUN mkdir -p /app/data && chown node:node /app/data
++
+ USER node
+ 
+ EXPOSE 8080
