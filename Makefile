@@ -100,9 +100,11 @@ $(BUILD_DIR)/excalidraw-storage-backend/.patched: Makefile patches/storage-backe
 # relative-path ENV values instead of the upstream defaults (which point at
 # oss-collab.excalidraw.com / json.excalidraw.com). Relative paths, not a
 # baked-in https://<IP> -- fetch() resolves them against whatever origin
-# served the page, so this works from any address. VITE_APP_WS_SERVER_URL
-# is deliberately left unset: socket.io-client's own default already falls
-# back to window.location when no URL is given.
+# served the page, so this works from any address. VITE_APP_WS_SERVER_URL=/
+# makes socket.io connect to the page's own host (nginx routes /socket.io/
+# to the room server). Every value here must be set explicitly: anything
+# left unset is filled from upstream's .env.production, which points at
+# excalidraw.com's public servers (e.g. oss-collab.excalidraw.com).
 $(BUILD_DIR)/excalidraw-frontend/.patched: Makefile patches/frontend-boards.patch
 	$(call reset-source,excalidraw-frontend)
 	sed -i 's/^FROM node:18 AS build$$/FROM node:22 AS build/' $(BUILD_DIR)/excalidraw-frontend/Dockerfile
@@ -110,6 +112,7 @@ $(BUILD_DIR)/excalidraw-frontend/.patched: Makefile patches/frontend-boards.patc
 ENV VITE_APP_BACKEND_V2_GET_URL=/api/v2/scenes/\
 ENV VITE_APP_BACKEND_V2_POST_URL=/api/v2/scenes/\
 ENV VITE_APP_HTTP_STORAGE_BACKEND_URL=/api/v2\
+ENV VITE_APP_WS_SERVER_URL=/\
 ENV VITE_APP_STORAGE_BACKEND=http\
 ENV VITE_APP_FIREBASE_CONFIG={}' \
 		$(BUILD_DIR)/excalidraw-frontend/Dockerfile
@@ -132,10 +135,12 @@ build-storage: clone
 	$(DOCKER) build -t $(STORAGE_IMG) $(BUILD_DIR)/excalidraw-storage-backend
 
 build-frontend: clone
-	@# An unset VITE_APP_STORAGE_BACKEND silently compiles to "" -> the app falls
-	@# back to Firebase and hides Boards. Refuse to build if it isn't pinned.
-	@grep -qx 'ENV VITE_APP_STORAGE_BACKEND=http' $(BUILD_DIR)/excalidraw-frontend/Dockerfile || \
-		{ echo "ERROR: frontend Dockerfile doesn't set VITE_APP_STORAGE_BACKEND=http; run 'make clean clone'"; exit 1; }
+	@# Unpinned values compile to "" or to excalidraw.com's public servers
+	@# (Firebase storage, oss-collab websocket). Refuse to build unless pinned.
+	@for line in 'ENV VITE_APP_STORAGE_BACKEND=http' 'ENV VITE_APP_WS_SERVER_URL=/'; do \
+		grep -qx "$$line" $(BUILD_DIR)/excalidraw-frontend/Dockerfile || \
+		{ echo "ERROR: frontend Dockerfile is missing '$$line'; run 'make clean clone'"; exit 1; }; \
+	done
 	$(DOCKER) build -t $(FRONTEND_IMG) $(BUILD_DIR)/excalidraw-frontend
 
 ## --- TLS cert (required: Live Collaboration needs a secure context) ----
