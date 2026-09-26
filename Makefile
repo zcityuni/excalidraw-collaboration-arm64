@@ -78,20 +78,21 @@ clone:
 
 patch: $(BUILD_DIR)/excalidraw-storage-backend/.patched $(BUILD_DIR)/excalidraw-frontend/.patched
 
-# Source-level features (e.g. the Boards list) live in patches/ and are
-# applied with git; a patch that already reverse-applies is skipped, so
-# re-running is safe.
-define apply-patch
-	git -C $(BUILD_DIR)/$(1) apply --reverse --check $(CURDIR)/patches/$(2) 2>/dev/null || \
-		git -C $(BUILD_DIR)/$(1) apply $(CURDIR)/patches/$(2)
+# Every patch run starts from pristine upstream source (git checkout + clean
+# in the shallow clone), then applies everything below unconditionally. No
+# "is it already patched?" guessing: a build/ dir left over from an older
+# version of this Makefile gets fully reset instead of half-skipped.
+define reset-source
+	git -C $(BUILD_DIR)/$(1) checkout -q -- .
+	git -C $(BUILD_DIR)/$(1) clean -fdq
 endef
 
 $(BUILD_DIR)/excalidraw-storage-backend/.patched: Makefile patches/storage-backend-boards.patch
+	$(call reset-source,excalidraw-storage-backend)
 	sed -i 's/npm install -g @nestjs\/cli$$/npm install -g @nestjs\/cli@8/' $(BUILD_DIR)/excalidraw-storage-backend/Dockerfile
-	grep -q 'mkdir -p /app/data' $(BUILD_DIR)/excalidraw-storage-backend/Dockerfile || \
-		sed -i '/^USER node$$/i RUN mkdir -p /app/data \&\& chown node:node /app/data\n' \
+	sed -i '/^USER node$$/i RUN mkdir -p /app/data \&\& chown node:node /app/data\n' \
 		$(BUILD_DIR)/excalidraw-storage-backend/Dockerfile
-	$(call apply-patch,excalidraw-storage-backend,storage-backend-boards.patch)
+	git -C $(BUILD_DIR)/excalidraw-storage-backend apply $(CURDIR)/patches/storage-backend-boards.patch
 	touch $@
 
 # Frontend gets: (a) node:18 -> node:22 (unpinned transitive deps -- marked,
@@ -103,16 +104,16 @@ $(BUILD_DIR)/excalidraw-storage-backend/.patched: Makefile patches/storage-backe
 # is deliberately left unset: socket.io-client's own default already falls
 # back to window.location when no URL is given.
 $(BUILD_DIR)/excalidraw-frontend/.patched: Makefile patches/frontend-boards.patch
+	$(call reset-source,excalidraw-frontend)
 	sed -i 's/^FROM node:18 AS build$$/FROM node:22 AS build/' $(BUILD_DIR)/excalidraw-frontend/Dockerfile
-	grep -q VITE_APP_HTTP_STORAGE_BACKEND_URL $(BUILD_DIR)/excalidraw-frontend/Dockerfile || \
-		sed -i '/^RUN yarn build:app:docker$$/i \
+	sed -i '/^RUN yarn build:app:docker$$/i \
 ENV VITE_APP_BACKEND_V2_GET_URL=/api/v2/scenes/\
 ENV VITE_APP_BACKEND_V2_POST_URL=/api/v2/scenes/\
 ENV VITE_APP_HTTP_STORAGE_BACKEND_URL=/api/v2\
 ENV VITE_APP_STORAGE_BACKEND=http\
 ENV VITE_APP_FIREBASE_CONFIG={}' \
 		$(BUILD_DIR)/excalidraw-frontend/Dockerfile
-	$(call apply-patch,excalidraw-frontend,frontend-boards.patch)
+	git -C $(BUILD_DIR)/excalidraw-frontend apply $(CURDIR)/patches/frontend-boards.patch
 	touch $@
 
 ## --- build images natively for arm64 ------------------------------------
@@ -131,6 +132,10 @@ build-storage: clone
 	$(DOCKER) build -t $(STORAGE_IMG) $(BUILD_DIR)/excalidraw-storage-backend
 
 build-frontend: clone
+	@# An unset VITE_APP_STORAGE_BACKEND silently compiles to "" -> the app falls
+	@# back to Firebase and hides Boards. Refuse to build if it isn't pinned.
+	@grep -qx 'ENV VITE_APP_STORAGE_BACKEND=http' $(BUILD_DIR)/excalidraw-frontend/Dockerfile || \
+		{ echo "ERROR: frontend Dockerfile doesn't set VITE_APP_STORAGE_BACKEND=http; run 'make clean clone'"; exit 1; }
 	$(DOCKER) build -t $(FRONTEND_IMG) $(BUILD_DIR)/excalidraw-frontend
 
 ## --- TLS cert (required: Live Collaboration needs a secure context) ----
