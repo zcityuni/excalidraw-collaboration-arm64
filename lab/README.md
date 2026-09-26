@@ -29,10 +29,7 @@ name and `<your-fork-url>` / `<branch>` with where this repo lives; prefix
 git clone --branch <branch> <your-fork-url> ~/excalidraw-lab
 cd ~/excalidraw-lab
 
-# fetch the upstream sources and apply our patches
-make clone
-
-# build under :lab tags -- never the default (live) tags
+# fetch + patch sources, build under :lab tags -- never the default (live) tags
 make build TAG=lab DOCKER="sudo docker"
 
 # self-signed cert for the lab's nginx (tailscale serve sits in front, so
@@ -49,10 +46,11 @@ sudo tailscale serve --bg --https=8443 https+insecure://127.0.0.1:8443
 Open `https://<host>.<tailnet>.ts.net:8443`.
 
 To try a code change: edit the source under `build/`, rebuild just that image
-(`make build-frontend TAG=lab`, etc.), then
+again with `make build TAG=lab` (unchanged images come straight from the build
+cache), then
 `sudo docker compose -f lab/docker-compose.lab.yaml up -d` again. Once it
-works, regenerate the matching file in `patches/` (see below) so the change
-survives a fresh `make clone`.
+works, capture it as a file in `patches/` (see below), or the next source
+reset will discard it.
 
 ## Quick checks
 
@@ -69,29 +67,30 @@ rooms, boards, scenes) against the live URL lands in live data.
 ## Turning source edits into patches
 
 Every change to upstream code lives in `patches/<component>/` and is applied in
-filename order by `make clone`, which first resets the sources to pristine
-upstream. So edits under `build/` are lost on the next `make clone` unless they
-are captured in a patch.
+filename order whenever the sources are prepared (`make sources`, and
+therefore `make build`), after resetting them to pristine upstream. So edits
+under `build/` are lost the next time the Makefile or a patch changes unless
+they are captured in a patch.
 
 To turn an edit into a new patch, snapshot the patched state in git's index
 (never commit inside `build/`), edit, then diff against that snapshot:
 
 ```sh
 cd build/excalidraw-frontend              # or build/excalidraw-storage-backend
-git add -A                                # snapshot: sources as patched by make clone
+git add -A                                # snapshot: sources as patched by make
 # ... edit, rebuild with TAG=lab, test ...
 git add -N .                              # include any new files in the diff
 git diff > ../../patches/excalidraw-frontend/03-my-change.patch
 ```
 
 `git diff` compares against the snapshot, so the new patch holds only your
-edits. `make clone` resets the index along with the files, so the snapshot
-can't leak into the next build.
+edits. Preparing the sources resets the index along with the files, so the
+snapshot can't leak into the next build.
 
 Check that the full set applies cleanly to fresh upstream source:
 
 ```sh
-make clone BUILD_DIR=/tmp/labtest && rm -rf /tmp/labtest
+make sources BUILD_DIR=/tmp/labtest && rm -rf /tmp/labtest
 ```
 
 ## Promote a lab build to live

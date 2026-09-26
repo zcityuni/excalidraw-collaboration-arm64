@@ -17,11 +17,12 @@ secure pages), so the proxy always serves TLS.
 
 ## Quick start
 
-On the machine that will host it:
+Needs Docker with the Compose plugin
+([install guide](https://docs.docker.com/engine/install/)), `git`, `make` and
+`openssl`. On the machine that will host it:
 
 ```sh
-make install-docker          # once, on Debian / Raspberry Pi OS, if Docker isn't installed
-make all HOSTS=<lan-ip>
+make HOSTS=<lan-ip>
 ```
 
 Open `https://<lan-ip>` and accept the self-signed certificate warning once
@@ -29,37 +30,38 @@ per browser.
 
 `HOSTS` only feeds the TLS certificate: list every address people will type,
 IPs and hostnames alike, e.g. `HOSTS="<lan-ip> <hostname>"`. The images don't
-depend on it, so changing addresses later only needs `make certs HOSTS=...`
-and `make restart`.
+depend on it; to change addresses later, run `make up HOSTS="..."`.
 
 ## Commands
 
 ```sh
-make clone                   # fetch pinned upstream sources and apply patches/
-make build                   # build the three images
-make certs HOSTS="<ip> ..."  # self-signed certificate for those addresses
-make up                      # start
-make ps / make logs          # status / follow logs
+make HOSTS="<ip> ..."        # first install: certificate, build, start
+make                         # update: rebuild and restart, keep the certificate
+make build                   # fetch + patch sources, build the images
+make certs HOSTS="<ip> ..."  # (re)make the certificate
+make up                      # start (add HOSTS=... to also replace the certificate)
 make down                    # stop (data is kept)
-make clean                   # delete build/ (sources only)
-make distclean               # also remove containers, images and the certificate
+make logs                    # follow logs
+make sources                 # fetch + patch sources without building
+make clean                   # delete build/
 ```
 
-Add `TAG=<name>` to `make build` to build under a different image tag, e.g. for
-a test copy (see [`../lab/README.md`](../lab/README.md)).
+`make` and `make up` check for a certificate first and stop immediately with
+the command to run if there isn't one. Add `TAG=<name>` to `make build` to
+build under a different image tag, e.g. for a test copy (see
+[`../lab/README.md`](../lab/README.md)).
 
 ## Updating
 
 ```sh
 git pull
-make build
-make up
+make
 ```
 
-`make up` only recreates containers whose image or settings changed. Before
-patching, `make clone` resets every source tree to its pristine upstream
-state, so a `build/` directory from an older version can't leave stale changes
-behind.
+Only containers whose image or settings changed are recreated. Each source
+checkout is reset to pristine upstream before patching, and re-cloned if the
+pinned upstream release changes, so a `build/` directory from an older version
+can't leave stale changes behind.
 
 ## Serving over Tailscale only
 
@@ -68,8 +70,7 @@ to localhost and let `tailscale serve` front it:
 
 ```sh
 echo "BIND_ADDR=127.0.0.1" > basic/.env
-make certs HOSTS=localhost    # the cert is only seen by tailscale itself
-make up
+make HOSTS=localhost          # the cert is only seen by tailscale itself
 sudo tailscale serve --bg --https=443 https+insecure://127.0.0.1:443
 ```
 
@@ -116,7 +117,7 @@ The frontend pins matter most. Vite bakes these values into the static bundle
 at build time, and any value left unset is filled from upstream's
 `.env.production`, which points live collaboration at **excalidraw.com's
 public services**: its Firebase project for storage and
-`oss-collab.excalidraw.com` for the websocket relay. `make build-frontend`
+`oss-collab.excalidraw.com` for the websocket relay. `make build`
 refuses to build unless `VITE_APP_STORAGE_BACKEND=http` and
 `VITE_APP_WS_SERVER_URL=/` are set, and setting them in a compose
 `environment:` block has no effect on an already-built bundle.
@@ -126,7 +127,7 @@ refuses to build unless `VITE_APP_STORAGE_BACKEND=http` and
 **"Couldn't save to the backend database"**, often with
 `a.reduce is not a function` or a Firebase error in the browser console. The
 frontend was built without the storage pin and is trying to use Firebase. Run
-`make clean clone build-frontend` and `make up`.
+`make clean` and `make`.
 
 **Collaboration fails, and the console shows a websocket to
 `oss-collab.excalidraw.com`.** Same cause, for the websocket pin; same fix.

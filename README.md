@@ -72,7 +72,7 @@ frontend, storage backend, and room service on separate local ports.
 ### Build from source (arm64, fully self-hosted)
 
 The published images are `linux/amd64` only. To run on a Raspberry Pi or other
-arm64 machine, `make all HOSTS=<lan-ip>` builds all three services from source
+arm64 machine, `make HOSTS=<lan-ip>` builds all three services from source
 with a TLS proxy, SQLite storage and a **Boards** list of recent rooms, and
 pins every frontend URL to your own server (a build left on upstream defaults
 quietly uses excalidraw.com's Firebase and collaboration relay). See
